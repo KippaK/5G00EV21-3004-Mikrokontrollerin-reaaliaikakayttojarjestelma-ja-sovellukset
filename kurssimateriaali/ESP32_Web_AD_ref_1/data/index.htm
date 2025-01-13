@@ -1,0 +1,66 @@
+<!doctype html>
+<html>
+<head>
+<title>Gtest</title>
+<script src="gauge.js"></script>
+</head>
+<body onload='process()'>
+
+<canvas id="gauge1" width="400" height="400"
+data-type="canv-gauge"
+data-title="my gauge"
+data-min-value="0"
+data-max-value="100"
+data-major-ticks="0 10 20 30 40 50 60 70 80 90 100"
+data-minor-ticks="2"
+data-stroke-ticks="true"
+data-units="X"
+data-value-format="3.2"
+data-glow="true"
+data-animation-delay="10"
+data-animation-duration="200"
+data-animation-fn="bounce"
+data-colors-needle="#f00 #00f"
+data-highlights="0 50 #88e, 50 100 #f66"
+></canvas>
+
+
+<script type="text/javascript">
+	
+	
+	
+	///////////////////////////////////// JS start /////////////////////
+
+	var AD1=0;
+
+
+  setInterval(function ( ) 
+  {
+  
+    var xhttp = new XMLHttpRequest();
+    xhttp.onreadystatechange = function() {
+      if (this.readyState == 4 && this.status == 200) {
+        
+		AD1=parseFloat(this.responseText);
+
+		Gauge.Collection.get('gauge1').setValue(AD1);
+		
+      }
+    };
+    xhttp.open("GET", "/AD1", true);
+    xhttp.send();
+		
+	
+  }, 500 ) ;			// Interval time 0.5 Sec
+
+
+		 
+	function tryme(param1)
+	 {	  }
+ 
+///////////////////////////////////////////// JS END ///////////////////
+    </script>
+
+
+</body>
+</html>
