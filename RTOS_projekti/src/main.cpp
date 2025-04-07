@@ -17,8 +17,14 @@
 
 #define MINUTE_MS 60000
 
+#define SOURCE_VERKKO 0
+#if SOURCE_VERKKO
 const char *WIFI_SSID = "SOURCE";
 const char *WIFI_PASSWORD = "Pelle!23";
+#else
+const char *WIFI_SSID = "Kekoaly";
+const char *WIFI_PASSWORD = "aivosolu";
+#endif
 
 const String PASSCODE = "8437";
 
@@ -83,6 +89,25 @@ char waitForKeyPress() {
   }
 }
 
+void addCORS(AsyncWebServerResponse *response) {
+  response->addHeader("Access-Control-Allow-Origin", "*");
+  response->addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  response->addHeader("Access-Control-Allow-Headers", "*");
+  response->addHeader("Access-Control-Allow-Credentials", "true");
+}
+
+void sendResponseWithCORS(AsyncWebServerRequest *request, int code, const String &contentType, const String &content) {
+  AsyncWebServerResponse *response = request->beginResponse(code, contentType, content);
+  addCORS(response);
+  request->send(response);
+}
+
+void sendResponseWithCORS(AsyncWebServerRequest *request, int code, const String &contentType) {
+  AsyncWebServerResponse *response = request->beginResponse(code, contentType);
+  addCORS(response);
+  request->send(response);
+}
+
 bool authenticateUser(AsyncWebServerRequest *request) {
   if (!request->hasHeader("username")) { return false; }
   if (!request->hasHeader("password")) { return false; }
@@ -98,13 +123,18 @@ bool authenticateUser(AsyncWebServerRequest *request) {
 }
 
 void setupApiEndpoints() {
+  // Handler for OPTIONS method
+  server.on("/api/*", HTTP_OPTIONS, [](AsyncWebServerRequest *request){
+    sendResponseWithCORS(request, 200, "application/json");
+  });
+
   // Door Status GET Endpoint
   server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest * request){
     String door_status_str;
     if (door_status == DOOR_OPEN) { door_status_str = "open"; }
     if (door_status == DOOR_CLOSED) { door_status_str = "closed"; }
     String message = "{\"message\": \"Door is " + door_status_str +"\", \"door_status\": \""+ String(door_status) + "\"}";
-    request->send(200, "application/json", message);
+    sendResponseWithCORS(request, 200, "application/json", message);
   });
 
   // Open Door POST endpoint
@@ -114,10 +144,10 @@ void setupApiEndpoints() {
       tft.fillScreen(TFT_BLACK);
       tft.setCursor(0, 0);
       tft.print("Open");
-      request->send(200, "application/json");
+      sendResponseWithCORS(request, 200, "application/json");
     }
     else {
-      request->send(401, "application/json");
+      sendResponseWithCORS(request, 401, "application/json");
     }
   });
 
@@ -128,22 +158,22 @@ void setupApiEndpoints() {
       tft.fillScreen(TFT_BLACK);
       tft.setCursor(0, 0);
       tft.print("Close");
-      request->send(200, "application/json");
+      sendResponseWithCORS(request, 200, "application/json");
     }
     else {
-      request->send(401, "application/json");
+      sendResponseWithCORS(request, 401, "application/json");
     }
   });
 
   // Add User POST endpoint
   server.on("/api/adduser", HTTP_POST, [](AsyncWebServerRequest *request){
     if (!request->hasHeader("passcode") || !request->hasHeader("password") || !request->hasHeader("username")) {
-      request->send(400, "application/json", "{\"error\": \"Missing headers\"}");
+      sendResponseWithCORS(request, 400, "application/json", "{\"error\": \"Missing headers\"}");
       return;
     }
     String received_passcode = request->getHeader("passcode")->value();
     if (received_passcode != PASSCODE) {
-      request->send(401, "application/json", "{\"error\": \"Invalid passcode\"}");
+      sendResponseWithCORS(request, 401, "application/json", "{\"error\": \"Invalid passcode\"}");
       return;
     }
     String username = request->getHeader("username")->value();
@@ -152,12 +182,12 @@ void setupApiEndpoints() {
     if (xSemaphoreTake(xSemaphore, pdMS_TO_TICKS(5000)) == pdTRUE) {
       db_vec.push_back(new_user);
       users_updated = true;
-      request->send(200, "application/json", "{\"message\": \"User added successfully\"}");
+      sendResponseWithCORS(request, 200, "application/json", "{\"message\": \"User added successfully\"}");
       xSemaphoreGive(xSemaphore);
       return;
     }
     else {
-      request->send(500, "application/json", "{\"error\": \"Internal server error during user creation\"}");
+      sendResponseWithCORS(request, 500, "application/json", "{\"error\": \"Internal server error during user creation\"}");
       return;
     }
   });
@@ -190,6 +220,7 @@ void db_init() {
 void update_db_file_task(void *params) {
   for (;;) {
     if (users_updated) {
+      xSemaphoreTake(xSemaphore, pdMS_TO_TICKS(5000));
       if (db_file) {
         db_file.close();
       }
@@ -197,8 +228,9 @@ void update_db_file_task(void *params) {
       for (int i = 0; i < db_vec.size(); i++) {
         db_file.println(db_vec.at(i));
       }
-    Serial.println("Updated database file from task");
-    users_updated = false;
+      Serial.println("Updated database file from task");
+      users_updated = false;
+      xSemaphoreGive(xSemaphore);
     }
     vTaskDelay(MINUTE_MS * 5 / portTICK_PERIOD_MS);
   }
@@ -215,6 +247,17 @@ void task_init() {
   );
 }
 
+void wifi_init() {
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.println("Connecting to wifi");
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print('.');
+    delay(500);
+  }
+  Serial.println("Connected to WiFi network");
+  Serial.println(WiFi.localIP());
+}
+
 void setup() {
   Serial.begin(115200);
   db_init();
@@ -223,8 +266,11 @@ void setup() {
     Serial.println("Failed to create semaphore");
     return;
   }
+  Serial.println("Initializing tasks");
   task_init();
   // port init for servo
+  Serial.println("Initializing WiFi");
+  wifi_init();
 
 
   // port init for keypad
@@ -244,16 +290,6 @@ void setup() {
   tft.setTextSize(2);
   tft.fillScreen(TFT_BLACK);
 
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  tft.println("Connecting to wifi");
-  while (WiFi.status() != WL_CONNECTED) {
-    tft.print('.');
-    delay(500);
-  }
-  tft.setCursor(0, 0);
-  tft.fillScreen(TFT_BLACK);
-  tft.println("Connected to WiFi network");
-  tft.print(WiFi.localIP());
 
   setupApiEndpoints();
 
