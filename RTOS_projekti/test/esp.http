@@ -1,0 +1,16 @@
+
+###
+POST http://192.168.1.251/api/open HTTP/1.1
+content-type: application/json
+username: admin
+password: admin
+
+###
+POST http://192.168.1.251/api/close HTTP/1.1
+content-type: application/json
+username: admin
+password: admin
+
+###
+GET http://192.168.1.251/api/status HTTP/1.1
+content-type: application/json 
