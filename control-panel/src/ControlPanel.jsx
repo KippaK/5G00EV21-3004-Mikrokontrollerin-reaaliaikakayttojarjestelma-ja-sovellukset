@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import CryptoJS from 'crypto-js'
 
-const IP = 'http://192.168.1.251'
+const IP = 'http://10.5.1.202'
 
 function encrypt(text) {
   return CryptoJS.SHA256(text).toString(CryptoJS.enc.Base64)
