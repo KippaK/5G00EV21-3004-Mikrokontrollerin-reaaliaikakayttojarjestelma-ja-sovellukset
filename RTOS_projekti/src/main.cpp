@@ -45,8 +45,9 @@ TaskHandle_t *codeTaskHandle = new TaskHandle_t;
 TaskHandle_t *db_update_task_h = new TaskHandle_t;
 SemaphoreHandle_t xSemaphore = NULL;
 
+String DB_FILENAME = "/db.csv";
 fs::File db_file;
-std::vector<String> db_vec;
+std::vector<String> db_vec = {};
 
 // === TFT Setup ===
 TFT_eSPI tft = TFT_eSPI();
@@ -89,6 +90,26 @@ typedef struct {
 } DisplayMessage;
 
 
+void drive_servo() {
+
+}
+
+void openDoor() {
+  door_status = DOOR_OPEN;
+  drive_servo();
+  tft.fillScreen(TFT_BLACK);
+  tft.setCursor(0, 0);
+  tft.print("Open");
+}
+
+void closeDoor() {
+  door_status = DOOR_CLOSED;
+  drive_servo();
+  tft.fillScreen(TFT_BLACK);
+  tft.setCursor(0, 0);
+  tft.print("Close");
+}
+
 void addCORS(AsyncWebServerResponse *response) {
   response->addHeader("Access-Control-Allow-Origin", "*");
   response->addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -122,6 +143,22 @@ bool authenticateUser(AsyncWebServerRequest *request) {
   return false;
 }
 
+bool userExists(String username) {
+  username.trim();
+  if (xSemaphoreTake(xSemaphore, pdTICKS_TO_MS(5000)) == pdTRUE) {
+    for (int i = 0; i < db_vec.size(); i++) {
+      String db_user = db_vec.at(i);
+      String db_username = db_user.substring(0, db_user.indexOf(','));
+      if (db_username == username) {
+        xSemaphoreGive(xSemaphore);
+        return true;
+      }
+    }
+    xSemaphoreGive(xSemaphore);
+  }
+  return false;
+}
+
 void setupApiEndpoints() {
   // Handler for OPTIONS method
   server.on("/api/*", HTTP_OPTIONS, [](AsyncWebServerRequest *request){
@@ -140,10 +177,7 @@ void setupApiEndpoints() {
   // Open Door POST endpoint
   server.on("/api/open", HTTP_POST, [](AsyncWebServerRequest *request){
     if (authenticateUser(request)) {
-      door_status = DOOR_OPEN;
-      tft.fillScreen(TFT_BLACK);
-      tft.setCursor(0, 0);
-      tft.print("Open");
+      openDoor();
       sendResponseWithCORS(request, 200, "application/json");
     }
     else {
@@ -154,10 +188,7 @@ void setupApiEndpoints() {
   // Close Door POST endpoint
   server.on("/api/close", HTTP_POST, [](AsyncWebServerRequest *request){
     if (authenticateUser(request)) {
-      door_status = DOOR_CLOSED;
-      tft.fillScreen(TFT_BLACK);
-      tft.setCursor(0, 0);
-      tft.print("Close");
+      closeDoor();
       sendResponseWithCORS(request, 200, "application/json");
     }
     else {
@@ -179,6 +210,10 @@ void setupApiEndpoints() {
     String username = request->getHeader("username")->value();
     String password = request->getHeader("password")->value();
     String new_user = username + ", " + password;
+    if (userExists(new_user)) {
+      sendResponseWithCORS(request, 400, "application/json", "{\"error\": \"User Exists\"}");
+      return;
+    }
     if (xSemaphoreTake(xSemaphore, pdMS_TO_TICKS(5000)) == pdTRUE) {
       db_vec.push_back(new_user);
       users_updated = true;
@@ -201,18 +236,22 @@ void db_init() {
     Serial.println("SPIFFS Mounted Successfully");
   }
 
-  db_file = SPIFFS.open("/db.csv", "r+");
+  db_file = SPIFFS.open(DB_FILENAME, FILE_READ);
   if (!db_file) {
-    db_file = SPIFFS.open("/db.csv", FILE_WRITE);
-    db_file.println("admin, admin");
-    db_vec.push_back("admin, admin");
+    Serial.println("Database file doesn't exist.");
+    Serial.println("Upload SPIFFS image and try again.");
+  } else {
+    Serial.println("Found existing databse file");
   }
   if (!db_file) {
     Serial.println("Failed to open or create db file");
     return;
   }
   while (db_file.available()) {
-    db_vec.push_back(db_file.readStringUntil('\n'));
+    String user = db_file.readStringUntil('\n');
+    user.trim();
+    Serial.println("User in db_file: " + user);
+    db_vec.push_back(user);
   }
   db_file.close();
 }
@@ -221,18 +260,17 @@ void update_db_file_task(void *params) {
   for (;;) {
     if (users_updated) {
       xSemaphoreTake(xSemaphore, pdMS_TO_TICKS(5000));
-      if (db_file) {
-        db_file.close();
-      }
-      db_file = SPIFFS.open("/db.csv", FILE_WRITE);
+      db_file = SPIFFS.open(DB_FILENAME, FILE_WRITE);
       for (int i = 0; i < db_vec.size(); i++) {
+        Serial.println("User in db_vec: " + db_vec.at(i));
         db_file.println(db_vec.at(i));
       }
+      db_file.close();
       Serial.println("Updated database file from task");
       users_updated = false;
       xSemaphoreGive(xSemaphore);
     }
-    vTaskDelay(MINUTE_MS * 5 / portTICK_PERIOD_MS);
+    vTaskDelay(DB_UPDATE_MS / portTICK_PERIOD_MS);
   }
 }
 
