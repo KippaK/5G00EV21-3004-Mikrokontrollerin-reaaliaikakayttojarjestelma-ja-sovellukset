@@ -20,6 +20,7 @@
 #define DOOR_CLOSED 0
 
 #define MINUTE_MS 60000
+#define DB_UPDATE_MS (5 * MINUTE_MS)
 
 const char *WIFI_SSID = "SOURCE";
 const char *WIFI_PASSWORD = "Pelle!23";
@@ -39,6 +40,9 @@ QueueHandle_t codeInputQueue;
 TimerHandle_t inactivityTimer;
 
 touch_pad_t touchPin;
+
+hw_timer_t *timer = NULL;
+volatile bool debounceDone = false;
 
 TaskHandle_t *displayTaskHandle = new TaskHandle_t;
 TaskHandle_t *codeTaskHandle = new TaskHandle_t;
@@ -89,25 +93,47 @@ typedef struct {
   int position;
 } DisplayMessage;
 
-
-void drive_servo() {
-
+void IRAM_ATTR onTimer() {
+  debounceDone = true;
 }
 
-void openDoor() {
+void wait_for_delay(uint32_t ms) {
+  debounceDone = false;
+  timerAlarmWrite(timer, ms * 1000, false); // Convert ms to µs
+  timerAlarmEnable(timer);
+  while (!debounceDone) {
+    // optionally yield(); if needed
+  }
+  timerAlarmDisable(timer);
+}
+
+void driveServo(){
+  myServo.attach(servoPin);
+  switch(door_status){
+    case DOOR_OPEN:
+      myServo.write(0);
+      Serial.println("[driveServo] Door Opened");
+      vTaskDelay(1500 / portTICK_PERIOD_MS);
+      break;
+    case DOOR_CLOSED:
+      myServo.write(90);
+      Serial.println("[driveServo] Door Closed");
+      vTaskDelay(1500 / portTICK_PERIOD_MS);
+      break;
+    default:
+      myServo.write(0);
+      break;
+  }
+  myServo.detach();
+}
+
+void openDoor(){
   door_status = DOOR_OPEN;
-  drive_servo();
-  tft.fillScreen(TFT_BLACK);
-  tft.setCursor(0, 0);
-  tft.print("Open");
+  driveServo();
 }
-
-void closeDoor() {
+void closeDoor(){
   door_status = DOOR_CLOSED;
-  drive_servo();
-  tft.fillScreen(TFT_BLACK);
-  tft.setCursor(0, 0);
-  tft.print("Close");
+  driveServo();
 }
 
 void addCORS(AsyncWebServerResponse *response) {
@@ -318,34 +344,6 @@ void displayTask(void *pvParameters) {
   }
 }
 
-void driveServo(){
-  myServo.attach(servoPin);
-  switch(door_status){
-    case DOOR_OPEN:
-      myServo.write(90);
-      Serial.println("[driveServo] Door Opened");
-      vTaskDelay(1500 / portTICK_PERIOD_MS);
-      break;
-    case DOOR_CLOSED:
-      myServo.write(0);
-      Serial.println("[driveServo] Door Closed");
-      vTaskDelay(1500 / portTICK_PERIOD_MS);
-      break;
-    default:
-      myServo.write(0);
-      break;
-  }
-  myServo.detach();
-}
-
-void openDoor(){
-  door_status = DOOR_OPEN;
-  driveServo();
-}
-void closeDoor(){
-  door_status = DOOR_CLOSED;
-  driveServo();
-}
 void getCodeTask(void *pvParameters) {
   Serial.println("Code Task Started");
   int key;
@@ -407,7 +405,7 @@ void getCodeTask(void *pvParameters) {
     xQueueSend(displayQueue, &msg, portMAX_DELAY);
     for (int i = 0; i < 10; i++) {
       tone(buzzerPin, 262, 100);
-      delay(150);
+      wait_for_delay(150);
     }
   }
 
@@ -437,8 +435,6 @@ void inputManagerTask(void *pvParameters) {
   }
 }
 
-
-
 void inactivityTimeoutCallback(TimerHandle_t xTimer) {
   Serial.println("[Timeout] No activity detected for 10s.");
 
@@ -466,17 +462,16 @@ void inactivityTimeoutCallback(TimerHandle_t xTimer) {
   }
 }
 
-
 // Function to scan keypad and return pressed key
 int checkKeypadStatus() {
   for (int i = 0; i < 4; i++) {
     digitalWrite(KEYPAD_GPIO_OUT[i], HIGH);
-    delay(1);
+    wait_for_delay(1);
     for (int j = 0; j < 4; j++) {
       if (digitalRead(KEYPAD_GPIO_IN[j]) == HIGH) {
-        delay(KEYPAD_DEBOUNCE_MS);
+        wait_for_delay(KEYPAD_DEBOUNCE_MS);
         while (digitalRead(KEYPAD_GPIO_IN[j]) == HIGH);  // Wait for release
-        delay(KEYPAD_DEBOUNCE_MS);
+        wait_for_delay(KEYPAD_DEBOUNCE_MS);
         digitalWrite(KEYPAD_GPIO_OUT[i], LOW);
         return KEYPAD[j][i];
       }
@@ -503,7 +498,7 @@ void wifi_init() {
   Serial.println("Connecting to wifi");
   while (WiFi.status() != WL_CONNECTED) {
     Serial.print('.');
-    delay(500);
+    wait_for_delay(500);
   }
   Serial.println("Connected to WiFi network");
   Serial.println(WiFi.localIP());
@@ -531,15 +526,21 @@ void tft_init() {
   unlockSprite.createSprite(64, 64); // You can pushImage here if you want to pre-fill
   unlockSprite.setSwapBytes(true);
   unlockSprite.pushImage(0,0,64,64, unlockIcon);
-
+  
   lockSprite.createSprite(64, 64); // Same as above
   unlockSprite.setSwapBytes(true);
   lockSprite.pushImage(0,0,64,64, lockIcon);
 }
 
+void setup_timer() {
+  timer = timerBegin(0, 80, true); // 1 tick = 1µs
+  timerAttachInterrupt(timer, &onTimer, true);
+}
+
 void setup() {
   Serial.begin(115200);
   db_init();
+  setup_timer();
   xSemaphore = xSemaphoreCreateMutex();
   if(xSemaphore == NULL) {
     Serial.println("Failed to create semaphore");
